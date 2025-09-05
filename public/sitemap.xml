@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <!-- الصفحة الرئيسية -->
+  <url>
+    <loc>https://bahthy.com/</loc>
+    <lastmod>2025-06-22</lastmod>
+    <priority>1.0</priority>
+  </url>
+
+  <!-- صفحة حول المشروع -->
+  <url>
+    <loc>https://bahthy.com/about-us</loc>
+    <lastmod>2025-06-22</lastmod>
+    <priority>0.6</priority>
+  </url>
+
+  <!-- صفحة سياسة الخصوصية -->
+  <url>
+    <loc>https://bahthy.com/policies</loc>
+    <lastmod>2025-06-22</lastmod>
+    <priority>0.3</priority>
+  </url>
+</urlset>

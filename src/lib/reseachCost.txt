@@ -1,0 +1,51 @@
+// src/lib/researchCost.ts
+import { supabase } from '@/integrations/supabase/client';
+
+let currentResearchCost = 0;
+
+export const getResearchCost = () => currentResearchCost;
+
+export const initializeResearchCost = async () => {
+  try {
+    const { data } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('id', 'research_cost')
+      .single();
+    
+    currentResearchCost = data?.value?.cost ?? 0;
+    return currentResearchCost;
+  } catch (error) {
+    console.error('Error initializing research cost:', error);
+    return 0;
+  }
+};
+
+export const subscribeToResearchCost = (callback: (cost: number) => void) => {
+  const subscription = supabase.channel('research_cost_updates')
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'app_settings',
+      filter: 'id=eq.research_cost'
+    }, (payload) => {
+      const newCost = payload.new?.value?.cost ?? 0;
+      currentResearchCost = newCost;
+      callback(newCost);
+    })
+    .subscribe();
+
+  const handleCustomEvent = () => {
+    initializeResearchCost().then(callback);
+  };
+  document.addEventListener('researchCostUpdated', handleCustomEvent);
+
+  return () => {
+    supabase.removeChannel(subscription);
+    document.removeEventListener('researchCostUpdated', handleCustomEvent);
+  };
+};
+
+export const notifyResearchCostChanged = () => {
+  document.dispatchEvent(new CustomEvent('researchCostUpdated'));
+};

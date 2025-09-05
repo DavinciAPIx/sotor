@@ -1,0 +1,47 @@
+# .bolt/ignore file for GAMMA project
+
+# Dependency directories
+/node_modules/
+/.git/
+/bun.lockb
+/package-lock.json
+
+# Build and cache files
+/dist/
+/build/
+/.vite/
+*.tmp
+
+# Configuration files (already optimized)
+*.config.*
+tsconfig*
+*.lock*
+
+# Test files
+*.test.*
+*.spec.*
+
+# Large files that don't need optimization
+/public/
+/supabase/
+
+# Specific components to ignore (since admin panel is your focus)
+/src/components/ui/
+/src/components/BonusDisplay.ts
+/src/components/CreditsDisplay.ts
+/src/components/Features*
+/src/components/Footer.ts
+/src/components/FoundersSection.ts
+/src/components/HeroSection.ts
+/src/components/PricingPlans.ts
+/src/components/Student*
+
+# Pages that aren't part of admin functionality
+/src/pages/AboutUs.ts
+/src/pages/Index.ts
+/src/pages/NotFound.ts
+/src/pages/Policies.ts
+
+# Hooks not related to admin data fetching
+/src/hooks/use-mobile.ts
+/src/hooks/use-toast.ts
