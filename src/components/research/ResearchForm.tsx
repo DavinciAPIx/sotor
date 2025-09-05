@@ -348,13 +348,15 @@ export default function ResearchForm() {
         console.log("Research is free, skipping credit deduction");
         
         const { error: transactionError } = await supabase
-          .from('transactions')
+          .from('transactions_rows')
           .insert({
-            amount: 0,
             user_id: user.id,
+            amount: 0,
             status: 'paid',
             research_topic: formData.title,
-            payment_method: 'free'
+            payment_method: 'free',
+            currency: 'SAR',
+            paid_at: new Date().toISOString()
           });
           
         if (transactionError) {
@@ -391,13 +393,15 @@ export default function ResearchForm() {
         notifyCreditsChanged();
         
         const { error: transactionError } = await supabase
-          .from('transactions')
+          .from('transactions_rows')
           .insert({
-            amount: researchCost,
             user_id: user.id,
+            amount: researchCost,
             status: 'paid',
             research_topic: formData.title,
-            payment_method: 'credit'
+            payment_method: 'credit',
+            currency: 'SAR',
+            paid_at: new Date().toISOString()
           });
           
         if (transactionError) {

@@ -26,19 +26,7 @@ export const getCurrentUserCredits = async (userId: string): Promise<number> => 
   try {
     console.log(`Getting current credits for user: ${userId}`);
     
-    // Try RPC function first
-    const { data: rpcBalance, error: rpcError } = await supabase
-      .rpc('get_user_credits', { user_id_param: userId });
-    
-    if (!rpcError && rpcBalance !== null) {
-      const balance = Number(rpcBalance);
-      console.log(`Got current balance from RPC: ${balance}`);
-      return balance;
-    }
-    
-    console.log(`RPC failed: ${JSON.stringify(rpcError)}, trying direct query...`);
-    
-    // Fallback to direct query
+    // Use direct query to user_credits table
     const { data: directBalance, error: directError } = await supabase
       .from('user_credits')
       .select('balance')
@@ -73,99 +61,38 @@ export const addCreditsToUser = async (userId: string, amount: number, paymentId
     
     console.log(`Updating user credits from ${currentBalance} to ${newBalance}`);
     
-    // Update user credits using upsert
-    const creditUpdateData = { 
-      user_id: userId, 
-      balance: newBalance,
-      updated_at: new Date().toISOString()
-    };
+    // Use the new RPC function to process payment
+    const { data: result, error: rpcError } = await supabase
+      .rpc('process_moyasar_payment', {
+        payment_id_param: paymentId || `manual_${Date.now()}`,
+        user_id_param: userId,
+        amount_param: amount
+      });
     
-    console.log(`Credit update data: ${JSON.stringify(creditUpdateData)}`);
-    
-    const { data: updateResult, error: updateCreditError } = await supabase
-      .from('user_credits')
-      .upsert(creditUpdateData, {
-        onConflict: 'user_id',
-        ignoreDuplicates: false
-      })
-      .select();
-    
-    if (updateCreditError) {
-      console.error("Failed to update user credits:", updateCreditError);
+    if (rpcError) {
+      console.error("RPC error:", rpcError);
       return {
         success: false,
         creditsAdded: 0,
         newBalance: currentBalance,
-        error: `Credit update failed: ${updateCreditError.message}`
+        error: `Payment processing failed: ${rpcError.message}`
       };
     }
     
-    console.log(`Credit update successful: ${JSON.stringify(updateResult)}`);
-    
-    // Verify the update worked by querying the balance again
-    const verifiedBalance = await getCurrentUserCredits(userId);
-    console.log(`Verified new balance: ${verifiedBalance}`);
-    
-    if (verifiedBalance !== newBalance) {
-      console.warn(`Expected balance ${newBalance} but got ${verifiedBalance}`);
-    }
-    
-    // Record the credit transaction for audit trail
-    const creditTransactionData = {
-      from_user_id: null, // null for payment credits
-      to_user_id: userId,
-      amount: creditsToAdd,
-      type: 'payment_credit',
-      created_at: new Date().toISOString()
-    };
-    
-    console.log(`Recording credit transaction: ${JSON.stringify(creditTransactionData)}`);
-    
-    const { error: creditTransactionError } = await supabase
-      .from('credit_transactions')
-      .insert(creditTransactionData);
-    
-    if (creditTransactionError) {
-      console.warn("Failed to record credit transaction:", creditTransactionError);
-      // Don't fail the whole process for audit trail issues
-    } else {
-      console.log("Credit transaction recorded successfully");
-    }
-    
-    // Create or update payment transaction record if paymentId is provided
-    if (paymentId) {
-      const transactionData = {
-        user_id: userId,
-        payment_id: paymentId,
-        amount: amount,
-        status: 'paid',
-        payment_method: 'moyasar',
-        research_topic: 'شحن رصيد',
-        currency: 'SAR',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        paid_at: new Date().toISOString()
+    if (!result || result.status !== 'success') {
+      const errorMessage = result?.message || 'Payment processing failed';
+      console.error("Payment processing failed:", errorMessage);
+      return {
+        success: false,
+        creditsAdded: 0,
+        newBalance: currentBalance,
+        error: errorMessage
       };
-      
-      console.log(`Recording payment transaction: ${JSON.stringify(transactionData)}`);
-      
-      const { error: transactionError } = await supabase
-        .from('transactions_rows')
-        .upsert(transactionData, {
-          onConflict: 'payment_id',
-          ignoreDuplicates: false
-        });
-      
-      if (transactionError) {
-        console.warn("Failed to record payment transaction:", transactionError);
-      } else {
-        console.log("Payment transaction recorded successfully");
-      }
     }
     
     // Dispatch events to update UI components
     try {
-      const eventDetail = { newBalance: verifiedBalance, creditsAdded: creditsToAdd };
+      const eventDetail = { newBalance: result.new_balance, creditsAdded: result.credits_added };
       window.dispatchEvent(new CustomEvent('creditsUpdated', { detail: eventDetail }));
       document.dispatchEvent(new CustomEvent('creditsUpdated'));
       console.log("UI update events dispatched successfully");
@@ -173,11 +100,11 @@ export const addCreditsToUser = async (userId: string, amount: number, paymentId
       console.warn("Failed to dispatch events:", eventError);
     }
     
-    console.log(`Credit addition completed successfully. Added: ${creditsToAdd}, New balance: ${verifiedBalance}`);
+    console.log(`Credit addition completed successfully. Added: ${result.credits_added}, New balance: ${result.new_balance}`);
     return { 
       success: true, 
-      creditsAdded: creditsToAdd, 
-      newBalance: verifiedBalance 
+      creditsAdded: result.credits_added, 
+      newBalance: result.new_balance 
     };
     
   } catch (error) {
@@ -204,34 +131,61 @@ export const validatePaymentAndAddCredits = async (
       throw new Error('Missing required parameters: userId or paymentId');
     }
     
-    // Check if we already processed this payment
-    const { data: existingTransaction, error: fetchError } = await supabase
-      .from('transactions_rows')
-      .select('*')
-      .eq('payment_id', paymentId)
-      .eq('status', 'paid')
-      .single();
+    // Determine amount (default to 10 if not provided)
+    const paymentAmount = amount || 10;
     
-    if (!fetchError && existingTransaction) {
-      console.log('Payment already processed:', existingTransaction);
-      
-      // Check if credits were already added by looking at current balance
+    // Use the RPC function to process payment
+    const { data: result, error: rpcError } = await supabase
+      .rpc('process_moyasar_payment', {
+        payment_id_param: paymentId,
+        user_id_param: userId,
+        amount_param: paymentAmount
+      });
+    
+    if (rpcError) {
+      console.error("RPC error:", rpcError);
+      return {
+        success: false,
+        creditsAdded: 0,
+        newBalance: 0,
+        error: rpcError.message
+      };
+    }
+    
+    if (!result) {
+      return {
+        success: false,
+        creditsAdded: 0,
+        newBalance: 0,
+        error: 'No result from payment processing'
+      };
+    }
+    
+    // Handle different result statuses
+    if (result.status === 'already_processed') {
       const currentBalance = await getCurrentUserCredits(userId);
       return {
         success: true,
-        creditsAdded: 0, // Already processed
+        creditsAdded: 0,
         newBalance: currentBalance,
         error: 'Payment already processed'
       };
     }
     
-    // Determine amount (default to 10 if not provided)
-    const paymentAmount = amount || 10;
+    if (result.status !== 'success') {
+      return {
+        success: false,
+        creditsAdded: 0,
+        newBalance: 0,
+        error: result.message || 'Payment processing failed'
+      };
+    }
     
-    // Add credits
-    const result = await addCreditsToUser(userId, paymentAmount, paymentId);
-    
-    return result;
+    return {
+      success: true,
+      creditsAdded: result.credits_added || 0,
+      newBalance: result.new_balance || 0
+    };
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";

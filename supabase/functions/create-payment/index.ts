@@ -188,7 +188,7 @@ serve(async (req) => {
     let transaction = null;
     try {
       const { data: transactionData, error: dbError } = await supabase
-        .from("transactions")
+        .from("transactions_rows")
         .insert({
           user_id: userId,
           amount: amount,
@@ -196,6 +196,8 @@ serve(async (req) => {
           payment_id: moyasarResult.id,
           payment_method: "moyasar",
           research_topic: `شحن رصيد - ${planTitle}`,
+          plan_title: planTitle,
+          currency: "SAR",
           created_at: new Date().toISOString()
         })
         .select()
@@ -226,11 +228,27 @@ serve(async (req) => {
       response.checkout_url = moyasarResult.source.transaction_url;
     } else if (moyasarResult.redirect_url) {
       response.checkout_url = moyasarResult.redirect_url;
+    } else if (moyasarResult.source?.gateway_url) {
+      response.checkout_url = moyasarResult.source.gateway_url;
     }
 
     // Check if payment was completed immediately
     if (moyasarResult.status === 'paid') {
       response.payment_completed = true;
+      
+      // Process the payment immediately if it's already paid
+      try {
+        const processResult = await supabase.rpc('process_moyasar_payment', {
+          payment_id_param: moyasarResult.id,
+          user_id_param: userId,
+          amount_param: amount
+        });
+        
+        console.log("Immediate payment processing result:", processResult);
+        response.credits_processed = processResult;
+      } catch (processError) {
+        console.error("Error processing immediate payment:", processError);
+      }
     }
 
     console.log("Sending response:", response);

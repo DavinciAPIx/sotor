@@ -142,7 +142,7 @@ const CreditsDisplay: React.FC<CreditsDisplayProps> = ({ userId, isAdmin = false
           { 
             event: 'INSERT', 
             schema: 'public', 
-            table: 'transactions',
+            table: 'transactions_rows',
             filter: `user_id=eq.${userId}` 
           }, 
           async (payload) => {

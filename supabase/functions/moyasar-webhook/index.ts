@@ -113,6 +113,7 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
   const status = paymentData.status || eventStatus;
   const metadata = paymentData.metadata || {};
   const userId = metadata.user_id;
+  const originalAmount = metadata.original_amount;
 
   if (!paymentId) {
     console.error("Missing payment ID in webhook data");
@@ -123,7 +124,7 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
 
   // Find the transaction
   const { data: transaction, error: findError } = await supabase
-    .from("transactions")
+    .from("transactions_rows")
     .select("*")
     .eq("payment_id", paymentId)
     .single();
@@ -134,17 +135,19 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
     // If transaction not found but payment is successful, try to create it
     if (status === 'paid' && userId && paymentData.amount) {
       console.log("Creating new transaction from webhook data");
-      const amount = Math.round(paymentData.amount / 100); // Convert from halalas to SAR
+      const amount = originalAmount || Math.round(paymentData.amount / 100); // Convert from halalas to SAR
       
       const { data: newTransaction, error: createError } = await supabase
-        .from("transactions")
+        .from("transactions_rows")
         .insert({
           user_id: userId,
           amount: amount,
           payment_id: paymentId,
           status: 'paid',
           payment_method: 'moyasar',
-          research_topic: 'شحن رصيد - webhook'
+          research_topic: 'شحن رصيد - webhook',
+          currency: 'SAR',
+          paid_at: new Date().toISOString()
         })
         .select()
         .single();
@@ -155,7 +158,7 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
       }
 
       // Process the newly created transaction
-      await processSuccessfulPayment(supabase, newTransaction);
+      await processSuccessfulPayment(supabase, newTransaction, paymentData);
       return;
     }
     
@@ -182,12 +185,18 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
   if (transaction.status !== mappedStatus) {
     console.log(`Updating transaction ${transaction.id} status from ${transaction.status} to ${mappedStatus}`);
     
+    const updateData: any = { 
+      status: mappedStatus,
+      updated_at: new Date().toISOString()
+    };
+    
+    if (mappedStatus === 'paid') {
+      updateData.paid_at = new Date().toISOString();
+    }
+    
     const { error: updateError } = await supabase
-      .from("transactions")
-      .update({ 
-        status: mappedStatus,
-        updated_at: new Date().toISOString()
-      })
+      .from("transactions_rows")
+      .update(updateData)
       .eq("payment_id", paymentId);
 
     if (updateError) {
@@ -203,7 +212,7 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
     console.log(`Payment successful, processing credits for user ${transaction.user_id}`);
     
     try {
-      await processSuccessfulPayment(supabase, transaction);
+      await processSuccessfulPayment(supabase, transaction, paymentData);
     } catch (creditError) {
       console.error("Error processing credits:", creditError);
       // Don't fail the webhook - transaction was updated successfully
@@ -212,12 +221,14 @@ async function handlePaymentEvent(supabase: any, paymentData: any, eventStatus: 
 }
 
 // Helper function to process successful payments
-async function processSuccessfulPayment(supabase: any, transaction: any) {
+async function processSuccessfulPayment(supabase: any, transaction: any, paymentData?: any) {
   const amount = transaction.amount;
   const userId = transaction.user_id;
   
+  console.log(`Processing successful payment for user ${userId}, amount: ${amount} SAR`);
+  
   // Calculate credits based on pricing plans
-  let creditsToAdd;
+  let creditsToAdd: number;
   if (amount === 10) {
     creditsToAdd = 10; // Copper plan
   } else if (amount === 30) {
@@ -225,47 +236,41 @@ async function processSuccessfulPayment(supabase: any, transaction: any) {
   } else if (amount === 50) {
     creditsToAdd = 70; // Gold plan
   } else {
-    creditsToAdd = amount; // Default: 1 credit per 1 SAR
+    creditsToAdd = amount; // Default: 1 SAR = 1 credit
   }
 
   console.log(`Adding ${creditsToAdd} credits for payment of ${amount} SAR to user ${userId}`);
 
-  // Get current balance using RPC function
-  const { data: currentCredits, error: creditFetchError } = await supabase
-    .rpc('get_user_credits', {
-      user_id_param: userId
-    });
+  // Get current balance directly from table
+  const { data: currentCreditsData, error: creditFetchError } = await supabase
+    .from('user_credits')
+    .select('balance')
+    .eq('user_id', userId)
+    .single();
 
   if (creditFetchError) {
     console.error("Error fetching current credits:", creditFetchError);
-    // Continue with 0 as fallback
   }
 
-  const newBalance = (currentCredits || 0) + creditsToAdd;
+  const currentCredits = currentCreditsData?.balance || 0;
+  const newBalance = currentCredits + creditsToAdd;
+  
+  console.log(`Updating credits from ${currentCredits} to ${newBalance}`);
 
-  // Update user credits using RPC function
+  // Update user credits directly
   const { error: updateCreditsError } = await supabase
-    .rpc('update_user_credits', {
-      user_id_param: userId,
-      new_balance: newBalance
+    .from("user_credits")
+    .upsert({
+      user_id: userId,
+      balance: newBalance,
+      updated_at: new Date().toISOString()
+    }, {
+      onConflict: 'user_id'
     });
 
   if (updateCreditsError) {
-    console.error("Failed to update user credits using RPC:", updateCreditsError);
-    
-    // Fallback to direct table update
-    const { error: directUpdateError } = await supabase
-      .from("user_credits")
-      .upsert({
-        user_id: userId,
-        balance: newBalance,
-        updated_at: new Date().toISOString()
-      });
-
-    if (directUpdateError) {
-      console.error("Failed to update user credits directly:", directUpdateError);
-      throw new Error(`Failed to update user credits: ${directUpdateError.message}`);
-    }
+    console.error("Failed to update user credits:", updateCreditsError);
+    throw new Error(`Failed to update user credits: ${updateCreditsError.message}`);
   }
 
   // Record the credit transaction
@@ -285,4 +290,11 @@ async function processSuccessfulPayment(supabase: any, transaction: any) {
   }
 
   console.log(`Successfully added ${creditsToAdd} credits to user ${userId}. New balance: ${newBalance}`);
+  
+  // Return success info for logging
+  return {
+    creditsAdded: creditsToAdd,
+    newBalance: newBalance,
+    userId: userId
+  };
 }

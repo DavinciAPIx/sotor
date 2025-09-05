@@ -37,150 +37,51 @@ const MoyasarCheckout: React.FC<MoyasarCheckoutProps> = ({
     console.log('Amount:', amount);
     
     try {
-      // Calculate credits to add based on amount
-      const creditsToAdd = calculateCreditsFromAmount(amount);
-      console.log('Credits to add:', creditsToAdd);
+      // Use the new RPC function to process payment
+      console.log('Processing payment via RPC function...');
+      const { data: processResult, error: processError } = await supabase
+        .rpc('process_moyasar_payment', {
+          payment_id_param: paymentId,
+          user_id_param: userId,
+          amount_param: amount
+        });
       
-      // Get current user credits with better error handling
-      let currentCredits = 0;
-      try {
-        console.log('Getting current credits via RPC...');
-        const { data: creditsData, error: creditsError } = await supabase
-          .rpc('get_user_credits', { user_id_param: userId });
-        
-        if (!creditsError && creditsData !== null) {
-          currentCredits = Number(creditsData);
-          console.log('Current credits from RPC:', currentCredits);
-        } else {
-          console.log('RPC failed, trying direct query...', creditsError);
-          
-          const { data: directCredits, error: directError } = await supabase
-            .from('user_credits')
-            .select('balance')
-            .eq('user_id', userId)
-            .single();
-          
-          if (!directError && directCredits) {
-            currentCredits = Number(directCredits.balance) || 0;
-            console.log('Current credits from direct query:', currentCredits);
-          } else {
-            console.log('Direct query also failed, starting with 0:', directError);
-            currentCredits = 0;
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching current credits:', error);
-        currentCredits = 0;
-      }
-
-      const newBalance = currentCredits + creditsToAdd;
-      console.log('New balance will be:', newBalance);
+      console.log('Payment processing result:', processResult);
       
-      // Update user credits with comprehensive logging
-      const creditUpdateData = {
-        user_id: userId,
-        balance: newBalance,
-        updated_at: new Date().toISOString()
-      };
-      
-      console.log('Updating credits with data:', creditUpdateData);
-      
-      const { data: updateResult, error: creditsError } = await supabase
-        .from('user_credits')
-        .upsert(creditUpdateData, {
-          onConflict: 'user_id',
-          ignoreDuplicates: false
-        })
-        .select();
-
-      if (creditsError) {
-        console.error('Error updating credits:', creditsError);
+      if (processError) {
+        console.error('Error processing payment:', processError);
         toast({
-          title: "تحذير",
+          title: "خطأ في معالجة الدفع",
           description: "تم الدفع بنجاح ولكن حدث خطأ في إضافة الرصيد. يرجى التواصل مع الدعم",
           variant: "destructive"
         });
         setIsProcessing(false);
         return;
       }
-
-      console.log('Credits updated successfully:', updateResult);
-
-      // Verify the update worked
-      try {
-        const { data: verifyBalance } = await supabase
-          .from('user_credits')
-          .select('balance')
-          .eq('user_id', userId)
-          .single();
-          
-        if (verifyBalance) {
-          const actualBalance = Number(verifyBalance.balance);
-          console.log('Verified balance:', actualBalance);
-          
-          if (actualBalance !== newBalance) {
-            console.warn(`Expected ${newBalance} but got ${actualBalance}`);
-          }
-        }
-      } catch (verifyError) {
-        console.warn('Could not verify balance:', verifyError);
-      }
-
-      // Record credit transaction for audit
-      const creditTransactionData = {
-        from_user_id: null,
-        to_user_id: userId,
-        amount: creditsToAdd,
-        type: 'payment_credit',
-        created_at: new Date().toISOString()
-      };
       
-      console.log('Recording credit transaction:', creditTransactionData);
-      
-      const { error: auditError } = await supabase
-        .from('credit_transactions')
-        .insert(creditTransactionData);
-        
-      if (auditError) {
-        console.warn('Failed to record credit transaction:', auditError);
-      }
-
-      // Create/update payment transaction record using correct table name
-      const transactionData = {
-        user_id: userId,
-        payment_id: paymentId,
-        amount: amount,
-        status: 'paid',
-        payment_method: 'moyasar',
-        research_topic: `شحن رصيد - ${planTitle}`,
-        plan_title: planTitle,
-        currency: 'SAR',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        paid_at: new Date().toISOString()
-      };
-      
-      console.log('Creating/updating transaction:', transactionData);
-      
-      const { error: transactionError } = await supabase
-        .from('transactions_rows') // Using correct table name
-        .upsert(transactionData, {
-          onConflict: 'payment_id',
-          ignoreDuplicates: false
+      if (!processResult || processResult.status !== 'success') {
+        const errorMessage = processResult?.message || 'فشل في معالجة الدفع';
+        console.error('Payment processing failed:', errorMessage);
+        toast({
+          title: "خطأ في معالجة الدفع",
+          description: errorMessage,
+          variant: "destructive"
         });
-
-      if (transactionError) {
-        console.warn('Failed to record transaction:', transactionError);
+        setIsProcessing(false);
+        return;
       }
+      
+      const creditsAdded = processResult.credits_added || 0;
+      const newBalance = processResult.new_balance || 0;
 
       toast({
         title: "تم الدفع بنجاح! 🎉",
-        description: `تم إضافة ${creditsToAdd} ريال إلى رصيدك. الرصيد الحالي: ${newBalance}`,
+        description: `تم إضافة ${creditsAdded} ريال إلى رصيدك. الرصيد الحالي: ${newBalance}`,
       });
 
       // Dispatch event to notify other components about credit update
       try {
-        const eventDetail = { newBalance, creditsAdded: creditsToAdd };
+        const eventDetail = { newBalance, creditsAdded };
         window.dispatchEvent(new CustomEvent('creditsUpdated', { detail: eventDetail }));
         document.dispatchEvent(new CustomEvent('creditsUpdated'));
         console.log('Credit update events dispatched');

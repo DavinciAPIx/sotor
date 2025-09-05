@@ -62,39 +62,49 @@ const PaymentSuccess = () => {
       addDebugLog(`👤 User ID: ${user.id}`);
       
       try {
-        // Use the centralized credit system
+        // Use the new RPC function to process payment
         const amount = parseInt(urlAmount || '10');
-        addDebugLog(`🔄 Processing payment with amount: ${amount} SAR`);
+        addDebugLog(`🔄 Processing payment with amount: ${amount} SAR using RPC`);
         
-        const result = await validatePaymentAndAddCredits(user.id, paymentId, amount);
+        const { data: result, error: rpcError } = await supabase
+          .rpc('process_moyasar_payment', {
+            payment_id_param: paymentId,
+            user_id_param: user.id,
+            amount_param: amount
+          });
         
-        addDebugLog(`📊 Credit processing result: ${JSON.stringify(result)}`);
+        addDebugLog(`📊 RPC result: ${JSON.stringify(result)}`);
         
-        if (result.success) {
-          addDebugLog(`✅ SUCCESS: Credits processed successfully`);
-          addDebugLog(`💳 Credits added: ${result.creditsAdded}`);
-          addDebugLog(`💰 New balance: ${result.newBalance}`);
-          
-          setCreditsAdded(result.creditsAdded);
-          setTransactionId(paymentId); // Use payment ID as transaction reference
-          setStatus('success');
-          
-          // Show success toast only if credits were actually added
-          if (result.creditsAdded > 0) {
-            toast({
-              title: "تم إضافة الرصيد بنجاح! 🎉",
-              description: `تم إضافة ${result.creditsAdded} رصيد لحسابك. الرصيد الحالي: ${result.newBalance}`,
-            });
-          } else if (result.error === 'Payment already processed') {
-            toast({
-              title: "تم معالجة الدفع مسبقاً",
-              description: `الرصيد الحالي: ${result.newBalance}`,
-            });
-          }
-          
-        } else {
-          addDebugLog(`❌ FAILURE: ${result.error}`);
-          throw new Error(result.error || "Failed to process payment");
+        if (rpcError) {
+          addDebugLog(`❌ RPC ERROR: ${rpcError.message}`);
+          throw new Error(rpcError.message || "Failed to process payment via RPC");
+        }
+        
+        if (!result || result.status !== 'success') {
+          const errorMessage = result?.message || "Failed to process payment";
+          addDebugLog(`❌ PROCESSING FAILURE: ${errorMessage}`);
+          throw new Error(errorMessage);
+        }
+        
+        addDebugLog(`✅ SUCCESS: Credits processed successfully`);
+        addDebugLog(`💳 Credits added: ${result.credits_added}`);
+        addDebugLog(`💰 New balance: ${result.new_balance}`);
+        
+        setCreditsAdded(result.credits_added || 0);
+        setTransactionId(paymentId);
+        setStatus('success');
+        
+        // Show success toast
+        if (result.credits_added > 0) {
+          toast({
+            title: "تم إضافة الرصيد بنجاح! 🎉",
+            description: `تم إضافة ${result.credits_added} رصيد لحسابك. الرصيد الحالي: ${result.new_balance}`,
+          });
+        } else if (result.status === 'already_processed') {
+          toast({
+            title: "تم معالجة الدفع مسبقاً",
+            description: `الرصيد الحالي: ${result.new_balance || 0}`,
+          });
         }
         
       } catch (error) {
